@@ -1,0 +1,347 @@
+<title>ASCII Lily Bouquet</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #09070b;
+  --stage: #040305;
+  --fg: #efe6dd;
+  --muted: #9a8e98;
+  --line: #2a2230;
+  --accent: #ff4d63;
+  --accent-ink: #1a0509;
+  --display: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.55 var(--mono);
+  margin: 0;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 40px;
+}
+.wrap { max-width: 980px; margin: 0 auto; display: grid; gap: 28px; }
+h1 {
+  font: italic 400 clamp(2.4rem, 7vw, 4.4rem)/1 var(--display);
+  letter-spacing: -0.01em;
+  margin: 0 0 12px;
+  text-wrap: balance;
+}
+.sub { margin: 0; color: var(--muted); max-width: 52ch; font-size: 0.9rem; }
+.grid { display: grid; grid-template-columns: minmax(0, 520px) minmax(0, 1fr); gap: 32px; align-items: start; }
+.stage {
+  margin: 0; position: relative; background: var(--stage);
+  border: 1px solid var(--line); border-radius: 4px; overflow: hidden; width: 100%;
+}
+.stage canvas { display: block; max-width: 100%; touch-action: pan-y; }
+.stage::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.22) 2px 3px);
+}
+.panel { display: grid; gap: 26px; min-width: 0; }
+.label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+.seg { display: flex; flex-wrap: wrap; gap: 8px; }
+button {
+  font: inherit; font-size: 0.85rem; color: var(--fg); background: transparent;
+  border: 1px solid var(--line); border-radius: 3px; padding: 8px 14px; cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 500; }
+button:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.note { margin: 0; color: var(--muted); font-size: 0.85rem; max-width: 46ch; }
+.readout { font-variant-numeric: tabular-nums; font-size: 0.85rem; border-top: 1px solid var(--line); padding-top: 14px; display: grid; gap: 4px; }
+.readout span { color: var(--muted); }
+@media (max-width: 760px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+</style>
+
+<main class="wrap">
+  <header>
+    <h1>Lilies, drawn in characters</h1>
+    <p class="sub">Vector lilies sway on a hidden canvas. Every frame is shrunk to a grid and retyped as coloured text.</p>
+  </header>
+  <div class="grid">
+    <figure class="stage" id="stage">
+      <canvas id="c" role="img" aria-label="A bouquet of red, pink, cream and yellow lilies rendered as moving coloured text characters on black"></canvas>
+    </figure>
+    <aside class="panel">
+      <div>
+        <p class="label">Character set</p>
+        <div class="seg" id="ramps">
+          <button type="button" data-ramp="letters" aria-pressed="true">Symbols</button>
+          <button type="button" data-ramp="blocks" aria-pressed="false">Blocks</button>
+          <button type="button" data-ramp="code" aria-pressed="false">Code</button>
+        </div>
+      </div>
+      <div>
+        <p class="label">Source</p>
+        <div class="seg">
+          <button type="button" id="src" aria-pressed="false">Show vectors</button>
+        </div>
+      </div>
+      <p class="note">Move your pointer across the bouquet to push the stems. Each character takes its colour from the pixel underneath it, and brighter pixels get denser characters.</p>
+      <div class="readout">
+        <div><span>Grid</span> <b id="r-grid">–</b></div>
+        <div><span>Glyphs drawn</span> <b id="r-glyphs">–</b></div>
+        <div><span>Lilies</span> <b id="r-lilies">–</b></div>
+        <div><span>Frame rate</span> <b id="r-fps">–</b></div>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script>
+(function () {
+  var TAU = Math.PI * 2;
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var stage = document.getElementById('stage');
+  var cv = document.getElementById('c');
+  var ctx = cv.getContext('2d');
+  var src = document.createElement('canvas');
+  var sc = src.getContext('2d');
+  var small = document.createElement('canvas');
+  var smc = small.getContext('2d', { willReadFrequently: true });
+
+  var RAMPS = { letters: ' .:-=+*#%@', blocks: ' \u2591\u2592\u2593\u2588', code: ' .,;:/|({[<#@' };
+  var ramp = 'letters', showSrc = false;
+  var cols = 90, rows = 72, cw = 6, chh = 10, fs = 10, dpr = 1, cssW = 520, cssH = 650;
+  var wind = 0, windTarget = 0;
+
+  var PAL = {
+    red:    { base: '#6e0613', tip: '#ff2638', vein: '#ffb3a6', spot: '#4a000c', throat: '#3c7a1e' },
+    pink:   { base: '#7e0c62', tip: '#ff74c6', vein: '#ffd0ec', spot: '#6a0a4a', throat: '#7a9a20' },
+    cream:  { base: '#c9962f', tip: '#fff1d2', vein: '#fff9e8', spot: '#a8641a', throat: '#8aa626' },
+    yellow: { base: '#bd7a00', tip: '#ffd844', vein: '#fff0a0', spot: '#8a4a00', throat: '#6c9a1c' },
+    peach:  { base: '#b84a3c', tip: '#ffdcc8', vein: '#fff0e6', spot: '#a8301f', throat: '#7a9a2a' }
+  };
+
+  // back to front
+  var FLOWERS = [
+    { x: 128, y: 205, r: 60, rot: -0.35, tilt: 0.82, pal: 'cream',  ph: 0.4 },
+    { x: 276, y: 196, r: 58, rot: 0.45,  tilt: 0.86, pal: 'yellow', ph: 1.9 },
+    { x: 204, y: 140, r: 54, rot: 0.1,   tilt: 0.8,  pal: 'peach',  ph: 3.1 },
+    { x: 96,  y: 308, r: 68, rot: -0.55, tilt: 0.85, pal: 'yellow', ph: 2.4 },
+    { x: 306, y: 312, r: 64, rot: 0.55,  tilt: 0.8,  pal: 'peach',  ph: 0.9 },
+    { x: 150, y: 240, r: 80, rot: -0.15, tilt: 0.9,  pal: 'red',    ph: 4.0 },
+    { x: 104, y: 362, r: 68, rot: 0.2,   tilt: 0.82, pal: 'pink',   ph: 5.2 },
+    { x: 258, y: 328, r: 82, rot: 0.15,  tilt: 0.88, pal: 'cream',  ph: 1.3 },
+    { x: 336, y: 392, r: 50, rot: 0.7,   tilt: 0.8,  pal: 'red',    ph: 2.8 },
+    { x: 80,  y: 414, r: 52, rot: -0.7,  tilt: 0.84, pal: 'yellow', ph: 3.7 },
+    { x: 196, y: 404, r: 56, rot: -0.05, tilt: 0.86, pal: 'pink',   ph: 0.2 }
+  ];
+  var LEAVES = [
+    { a: -1.15, len: 150, w: 15, ox: -8 }, { a: -0.8, len: 175, w: 17, ox: -4 },
+    { a: -0.4, len: 190, w: 16, ox: -2 },  { a: 0.0, len: 200, w: 15, ox: 0 },
+    { a: 0.4, len: 185, w: 16, ox: 2 },    { a: 0.8, len: 170, w: 17, ox: 4 },
+    { a: 1.15, len: 150, w: 15, ox: 8 }
+  ];
+  var SPOTS = [[0.1,0.3],[-0.14,0.38],[0.05,0.5],[-0.08,0.58],[0.16,0.6],[-0.17,0.28],[0.0,0.7],[0.12,0.44]];
+
+  var seed = 7;
+  function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+  var STARS = [];
+  for (var s = 0; s < 55; s++) STARS.push({ x: rnd() * 400, y: rnd() * 470, r: 0.9 + rnd() * 1.1, ph: rnd() * TAU });
+
+  function petal(c, len, wid, pal, spots) {
+    var g = c.createLinearGradient(0, 0, 0, -len);
+    g.addColorStop(0, pal.base); g.addColorStop(0.6, pal.tip); g.addColorStop(1, pal.tip);
+    c.fillStyle = g;
+    c.beginPath();
+    c.moveTo(0, 0);
+    c.bezierCurveTo(wid, -len * 0.25, wid * 0.9, -len * 0.75, 0, -len);
+    c.bezierCurveTo(-wid * 0.9, -len * 0.75, -wid, -len * 0.25, 0, 0);
+    c.fill();
+    c.globalAlpha = 0.6; c.strokeStyle = pal.vein; c.lineWidth = Math.max(1.5, len * 0.04);
+    c.beginPath(); c.moveTo(0, -len * 0.06); c.lineTo(0, -len * 0.86); c.stroke();
+    c.globalAlpha = 1;
+    if (spots) {
+      c.fillStyle = pal.spot;
+      for (var i = 0; i < SPOTS.length; i++) {
+        c.beginPath(); c.arc(SPOTS[i][0] * len, -SPOTS[i][1] * len, Math.max(1.4, len * 0.026), 0, TAU); c.fill();
+      }
+    }
+  }
+
+  function lily(c, f, t, fx, fy) {
+    var pal = PAL[f.pal];
+    var sway = Math.sin(t * 0.8 + f.ph) * 0.05 + wind * 0.07;
+    c.save();
+    c.translate(fx, fy);
+    c.rotate(f.rot + sway);
+    c.scale(1, f.tilt);
+    var i, a;
+    for (i = 0; i < 3; i++) {
+      c.save(); c.rotate(i * TAU / 3 + Math.sin(t * 1.3 + i + f.ph) * 0.03);
+      petal(c, f.r, f.r * 0.34, pal, false); c.restore();
+    }
+    for (i = 0; i < 3; i++) {
+      c.save(); c.rotate(i * TAU / 3 + TAU / 6 + Math.sin(t * 1.1 + i * 2 + f.ph) * 0.03);
+      petal(c, f.r * 0.92, f.r * 0.4, pal, true); c.restore();
+    }
+    c.fillStyle = pal.throat; c.beginPath(); c.arc(0, 0, f.r * 0.1, 0, TAU); c.fill();
+    for (i = 0; i < 6; i++) {
+      a = i * TAU / 6 + 0.3 + Math.sin(t * 1.6 + i + f.ph) * 0.05;
+      var ex = Math.cos(a) * f.r * 0.44, ey = Math.sin(a) * f.r * 0.44;
+      c.strokeStyle = '#f6e8b4'; c.lineWidth = Math.max(1.4, f.r * 0.022);
+      c.beginPath(); c.moveTo(0, 0); c.lineTo(ex, ey); c.stroke();
+      c.save(); c.translate(ex, ey); c.rotate(a);
+      c.fillStyle = '#8a2e12'; c.beginPath(); c.ellipse(0, 0, f.r * 0.07, f.r * 0.03, 0, 0, TAU); c.fill();
+      c.restore();
+    }
+    c.restore();
+  }
+
+  function leaf(c, l, t) {
+    c.save();
+    c.translate(200 + l.ox, 482);
+    c.rotate(l.a + Math.sin(t * 0.7 + l.a * 3) * 0.025 + wind * 0.05);
+    var g = c.createLinearGradient(0, 0, 0, -l.len);
+    g.addColorStop(0, '#1b5a1a'); g.addColorStop(1, '#6fd24a');
+    c.fillStyle = g;
+    c.beginPath();
+    c.moveTo(0, 0);
+    c.bezierCurveTo(l.w, -l.len * 0.3, l.w * 0.8, -l.len * 0.75, 0, -l.len);
+    c.bezierCurveTo(-l.w * 0.8, -l.len * 0.75, -l.w, -l.len * 0.3, 0, 0);
+    c.fill();
+    c.restore();
+  }
+
+  function scene(t) {
+    sc.setTransform(src.width / 400, 0, 0, src.height / 500, 0, 0);
+    sc.fillStyle = '#000'; sc.fillRect(0, 0, 400, 500);
+    var i, f;
+    for (i = 0; i < STARS.length; i++) {
+      var st = STARS[i];
+      sc.globalAlpha = 0.25 + 0.3 * (0.5 + 0.5 * Math.sin(t * 1.2 + st.ph));
+      sc.fillStyle = '#fff'; sc.beginPath(); sc.arc(st.x, st.y, st.r, 0, TAU); sc.fill();
+    }
+    sc.globalAlpha = 1;
+    var pos = [];
+    for (i = 0; i < FLOWERS.length; i++) {
+      f = FLOWERS[i];
+      var k = (500 - f.y) / 350;
+      pos.push([f.x + Math.sin(t * 0.7 + f.ph) * 3 * k + wind * 11 * k, f.y + Math.cos(t * 0.6 + f.ph) * 1.5 * k]);
+    }
+    sc.lineCap = 'round';
+    for (i = 0; i < FLOWERS.length; i++) {
+      var bx = 200 + (i - 5) * 1.5, by = 492;
+      sc.strokeStyle = '#2d8a28'; sc.lineWidth = 4;
+      sc.beginPath(); sc.moveTo(bx, by);
+      sc.quadraticCurveTo(bx + (pos[i][0] - bx) * 0.15, (by + pos[i][1]) / 2, pos[i][0], pos[i][1]);
+      sc.stroke();
+    }
+    for (i = 0; i < LEAVES.length; i++) leaf(sc, LEAVES[i], t);
+    for (i = 0; i < FLOWERS.length; i++) lily(sc, FLOWERS[i], t, pos[i][0], pos[i][1]);
+  }
+
+  function layout() {
+    var w = Math.max(240, stage.clientWidth);
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    cols = Math.max(56, Math.min(110, Math.round(w / 6.2)));
+    cw = w / cols; fs = cw / 0.6; chh = fs * 1.12;
+    rows = Math.round(cols * cw * 1.25 / chh);
+    cssW = w; cssH = rows * chh;
+    cv.style.width = cssW + 'px'; cv.style.height = cssH + 'px';
+    cv.width = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
+    small.width = cols; small.height = rows;
+    src.width = cols * 3; src.height = rows * 3;
+    document.getElementById('r-grid').textContent = cols + ' \u00d7 ' + rows + ' cells';
+  }
+
+  var glyphCount = 0;
+  function render(t) {
+    scene(t);
+    if (showSrc) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(src, 0, 0, cv.width, cv.height);
+      glyphCount = 0;
+      return;
+    }
+    smc.imageSmoothingEnabled = true; smc.imageSmoothingQuality = 'high';
+    smc.drawImage(src, 0, 0, cols, rows);
+    var d = smc.getImageData(0, 0, cols, rows).data;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    ctx.font = '500 ' + fs.toFixed(2) + 'px "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    var chars = RAMPS[ramp], n = chars.length, count = 0;
+    for (var y = 0; y < rows; y++) {
+      for (var x = 0; x < cols; x++) {
+        var p = (y * cols + x) * 4;
+        var r = d[p], g = d[p + 1], b = d[p + 2];
+        var m = r > g ? (r > b ? r : b) : (g > b ? g : b);
+        if (m < 22) continue;
+        var lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        var v = Math.pow(Math.min(1, lum / 255 * 1.45), 0.7);
+        var idx = Math.round(v * (n - 1));
+        if (idx < 1) idx = 1;
+        var s = 255 / m;
+        ctx.fillStyle = 'rgb(' + ((r * s * 0.96) | 0) + ',' + ((g * s * 0.96) | 0) + ',' + ((b * s * 0.96) | 0) + ')';
+        ctx.fillText(chars.charAt(idx), x * cw + cw / 2, y * chh + chh / 2 + 1);
+        count++;
+      }
+    }
+    glyphCount = count;
+  }
+
+  var t0 = performance.now(), frames = 0, lastFps = t0, STILL_T = 2.2;
+  function loop(now) {
+    wind += (windTarget - wind) * 0.06;
+    render((now - t0) / 1000);
+    frames++;
+    if (now - lastFps > 800) {
+      document.getElementById('r-fps').textContent = Math.round(frames * 1000 / (now - lastFps)) + ' fps';
+      document.getElementById('r-glyphs').textContent = glyphCount.toLocaleString();
+      frames = 0; lastFps = now;
+    }
+    requestAnimationFrame(loop);
+  }
+  function stillFrame() {
+    render(STILL_T);
+    document.getElementById('r-glyphs').textContent = glyphCount.toLocaleString();
+  }
+
+  document.getElementById('r-lilies').textContent = String(FLOWERS.length);
+
+  var rampBtns = document.querySelectorAll('#ramps button');
+  Array.prototype.forEach.call(rampBtns, function (b) {
+    b.addEventListener('click', function () {
+      ramp = b.getAttribute('data-ramp');
+      Array.prototype.forEach.call(rampBtns, function (o) { o.setAttribute('aria-pressed', o === b ? 'true' : 'false'); });
+      if (reduce) stillFrame();
+    });
+  });
+  var srcBtn = document.getElementById('src');
+  srcBtn.addEventListener('click', function () {
+    showSrc = !showSrc;
+    srcBtn.setAttribute('aria-pressed', showSrc ? 'true' : 'false');
+    srcBtn.textContent = showSrc ? 'Show characters' : 'Show vectors';
+    if (reduce) stillFrame();
+  });
+
+  stage.addEventListener('pointermove', function (e) {
+    var rect = stage.getBoundingClientRect();
+    windTarget = ((e.clientX - rect.left) / rect.width - 0.5) * 2;
+  });
+  stage.addEventListener('pointerleave', function () { windTarget = 0; });
+
+  layout();
+  if (window.ResizeObserver) {
+    var lastW = stage.clientWidth;
+    new ResizeObserver(function () {
+      if (Math.abs(stage.clientWidth - lastW) < 2) return;
+      lastW = stage.clientWidth; layout(); if (reduce) stillFrame();
+    }).observe(stage);
+  }
+  var go = function () { if (reduce) stillFrame(); else requestAnimationFrame(loop); };
+  if (document.fonts && document.fonts.load) {
+    document.fonts.load('500 12px "JetBrains Mono"').then(go, go);
+  } else { go(); }
+})();
+</script>
